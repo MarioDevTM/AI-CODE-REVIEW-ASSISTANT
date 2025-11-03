@@ -1,5 +1,5 @@
 // This is a test file with some common issues that the code review should catch
-
+Testing this PR // not a comment by the way
 // Missing semicolons
 const x = 10
 const y = 20
