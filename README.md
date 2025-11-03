@@ -140,14 +140,14 @@ GITHUB_PAT=ghp_YourPersonalAccessTokenGoesHere
 ### Terminal 1 – Backend
 ```bash
 cd backend
-node server.js
+npm start
 ```
 Output: `Backend server running at http://127.0.0.1:3001`
 
 ### Terminal 2 – Frontend
 ```bash
 cd frontend
-npm start
+npm run dev
 ```
 Opens: `http://localhost:5180`
 
