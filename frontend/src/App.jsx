@@ -1,14 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import './index.css';
-// --- FIX 1: ADDED MISSING IMPORT FOR THE REVIEW DIFFS ---
 import { DiffView } from '@git-diff-view/react';
 import CommentChatbot from './CommentChatbot.jsx';
-
-// --- IMPORTS FOR UPGRADES ---
 import ReactMarkdown from 'react-markdown';
 import ReactDiffViewer, { DiffMethod } from 'react-diff-viewer-continued';
-// --- FIX 2: REMOVED BROKEN IMPORT LINE ---
-// import 'react-diff-viewer-continued/dist/index.css';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus, prism } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
@@ -29,7 +24,7 @@ const ThemeToggle = ({ theme, onToggle }) => (
     </button>
 );
 
-// --- UPDATED: Mode Switcher (Now shows loading dots) ---
+// --- UPDATED: Mode Switcher ---
 const ModeSwitcher = ({ mode, onModeChange, loadings }) => (
     <div className="mode-switcher">
         <button
@@ -39,6 +34,14 @@ const ModeSwitcher = ({ mode, onModeChange, loadings }) => (
             Review/Refactor
             {loadings.review && <span className="loading-dot"></span>}
         </button>
+        {/* --- NEW "Review PR" Button --- */}
+        <button
+            className={mode === 'pr' ? 'active' : ''}
+            onClick={() => onModeChange('pr')}
+        >
+            Review PR
+            {loadings.pr && <span className="loading-dot"></span>}
+        </button>
         <button
             className={mode === 'explain' ? 'active' : ''}
             onClick={() => onModeChange('explain')}
@@ -46,7 +49,6 @@ const ModeSwitcher = ({ mode, onModeChange, loadings }) => (
             Explain Code
             {loadings.explain && <span className="loading-dot"></span>}
         </button>
-        {/* --- REMOVED 'AI Tools' BUTTON --- */}
         <button
             className={mode === 'history' ? 'active' : ''}
             onClick={() => onModeChange('history')}
@@ -58,6 +60,7 @@ const ModeSwitcher = ({ mode, onModeChange, loadings }) => (
 
 // --- Code Input Box (UPDATED for Review Modes) ---
 const CodeInputBox = ({ onReview, onRefactor, loading }) => {
+    // ... (This component remains unchanged) ...
     const [code, setCode] = useState('');
     const [filename, setFilename] = useState('example.js');
     const [reviewMode, setReviewMode] = useState('standard'); // standard, security, performance
@@ -123,8 +126,44 @@ const CodeInputBox = ({ onReview, onRefactor, loading }) => {
     );
 };
 
+// --- NEW: PR Input Box ---
+const PrInputBox = ({ onPrReview, loading }) => {
+    const [prUrl, setPrUrl] = useState('');
+
+    return (
+        <div className="code-input-box">
+            <h2>Review a GitHub Pull Request</h2>
+            <p>
+                Paste the full URL to a pull request. The bot must be installed on
+                that repository.
+            </p>
+
+            <label htmlFor="pr-url">Pull Request URL:</label>
+            <input
+                type="text"
+                id="pr-url"
+                className="filename-input"
+                value={prUrl}
+                onChange={(e) => setPrUrl(e.target.value)}
+                placeholder="https://github.com/owner/repo/pull/123"
+            />
+
+            <div className="snippet-actions">
+                <button
+                    onClick={() => onPrReview(prUrl)}
+                    disabled={loading || !prUrl}
+                    className="snippet-review-button"
+                >
+                    Review Pull Request
+                </button>
+            </div>
+        </div>
+    );
+};
+
 // --- Code Explainer Box ---
 const CodeExplainerBox = ({ onExplain, loading, result }) => {
+    // ... (This component remains unchanged) ...
     const [code, setCode] = useState('');
     const [filename, setFilename] = useState('example.js');
 
@@ -168,7 +207,6 @@ const CodeExplainerBox = ({ onExplain, loading, result }) => {
                         </div>
                     )}
                     {!loading && !result && <p className="placeholder-text">Your explanation will appear here...</p>}
-                    {/* Render the explanation which is now a simple string */}
                     <ReactMarkdown>{result}</ReactMarkdown>
                 </div>
             </div>
@@ -178,6 +216,7 @@ const CodeExplainerBox = ({ onExplain, loading, result }) => {
 
 // --- Refactor Result Display ---
 const RefactorResult = ({ result, onClear, theme }) => {
+    // ... (This component remains unchanged) ...
     const [showChat, setShowChat] = useState(false);
     return (
         <div className="refactor-result">
@@ -193,7 +232,6 @@ const RefactorResult = ({ result, onClear, theme }) => {
                     </button>
                 </div>
                 <div className="markdown-content">
-                    {/* Render the explanation, which is now a simple string */}
                     <ReactMarkdown>{result.explanation || "No explanation provided."}</ReactMarkdown>
                 </div>
                 {showChat && (
@@ -220,6 +258,7 @@ const RefactorResult = ({ result, onClear, theme }) => {
 
 
 // --- Helper Components ---
+// ... (All helper components: getSeverityIcon, SuggestedFix, ReviewSummary, MentorFeedback, EducationalLinks, CommentLine, HistoryItem, HistoryDashboard... are UNCHANGED) ...
 const getSeverityIcon = (severity) => {
     if (severity === 'error') return '🚫';
     if (severity === 'warning') return '⚠️';
@@ -465,7 +504,7 @@ const HistoryItem = ({ item, theme }) => {
             case 'review': return `Review: ${title}`;
             case 'refactor': return `Refactor: ${title}`;
             case 'explain': return `Explain: ${title}`;
-            // --- REMOVED 'test', 'doc', 'translate' types ---
+            case 'pr': return `PR Review: ${title}`; // --- NEW History Type ---
             default: return title;
         }
     };
@@ -474,13 +513,14 @@ const HistoryItem = ({ item, theme }) => {
             case 'review': return '🩺';
             case 'refactor': return '🛠️';
             case 'explain': return '💡';
-            // --- REMOVED 'test', 'doc', 'translate' icons ---
+            case 'pr': return '🚀'; // --- NEW History Icon ---
             default: return '🤖';
         }
     };
     const getScore = (item) => {
         try {
-            if (item.type === 'review' && item.data?.files?.[0]?.review?.codeHealthScore) {
+            // --- UPDATED: Also get score for 'pr' type ---
+            if ((item.type === 'review' || item.type === 'pr') && item.data?.files?.[0]?.review?.codeHealthScore) {
                 const score = item.data.files[0].review.codeHealthScore;
                 return (
                     <span className={`history-score ${score.charAt(0)}`}>
@@ -539,7 +579,7 @@ const HistoryDashboard = ({ history, onClear, theme }) => (
 );
 
 
-// --- FIXED: Non-streaming API request function ---
+// --- apiRequest function is UNCHANGED ---
 const apiRequest = async (endpoint, body, setLoading, setError) => {
     setLoading(true);
     if (setError) setError('');
@@ -569,9 +609,6 @@ const apiRequest = async (endpoint, body, setLoading, setError) => {
 };
 
 
-// --- AI TOOLS DASHBOARD AND SUB-COMPONENTS REMOVED ---
-
-
 // --- Main App Component ---
 function App() {
     // --- STATE ---
@@ -581,16 +618,15 @@ function App() {
     const [expandedFiles, setExpandedFiles] = useState({});
     const [resolvedComments, setResolvedComments] = useState({});
     const [theme, setTheme] = useState('dark');
-    const [mode, setMode] = useState('snippet'); // snippet, explain, history
+    const [mode, setMode] = useState('snippet'); // snippet, pr, explain, history
 
     // --- LIFTED STATE ---
     const [reviewLoading, setReviewLoading] = useState(false);
     const [refactorResult, setRefactorResult] = useState(null);
+    const [prReviewLoading, setPrReviewLoading] = useState(false); // --- NEW Loading State ---
 
     const [explainLoading, setExplainLoading] = useState(false);
     const [explainerResult, setExplainerResult] = useState('');
-
-    // --- REMOVED toolsLoading AND toolResults STATE ---
 
     const [reviewHistory, setReviewHistory] = useState(() => {
         try {
@@ -622,7 +658,7 @@ function App() {
     const saveToHistory = (type, title, data) => {
         const newHistoryItem = {
             id: new Date().toISOString(),
-            type, // 'review', 'refactor', 'explain'
+            type, // 'review', 'refactor', 'explain', 'pr'
             title, // e.g., "example.js"
             data,  // The full data (files array, result object, or result string)
         };
@@ -638,11 +674,11 @@ function App() {
         setExpandedFiles(newExpandedState);
 
         if (reviewedFiles.length > 0) {
-            saveToHistory('review', target, { files: reviewedFiles });
+            saveToHistory(reviewType, target, { files: reviewedFiles });
         }
     };
 
-    // --- FIXED: All handlers are now NON-STREAMING ---
+    // --- Handlers ---
 
     const handleSnippetReview = async (code, filename, reviewMode) => {
         setReviewLoading(true);
@@ -656,11 +692,33 @@ function App() {
                 setReviewLoading,
                 setError
             );
-            if (data) handleApiResponse(data, 'snippet', `${filename} (${reviewMode})`);
+            if (data) handleApiResponse(data, 'review', `${filename} (${reviewMode})`);
         } catch (err) {
             setError(err.message);
         } finally {
             setReviewLoading(false);
+        }
+    };
+
+    // --- NEW: PR Review Handler ---
+    const handlePrReview = async (prUrl) => {
+        setPrReviewLoading(true);
+        setError(null);
+        setFiles([]);
+        setRefactorResult(null);
+        try {
+            const data = await apiRequest(
+                '/api/review-pr',
+                { prUrl },
+                setPrReviewLoading,
+                setError
+            );
+            // We use 'pr' as the reviewType for history
+            if (data) handleApiResponse(data, 'pr', prUrl.split('/').slice(-3).join('/'));
+        } catch (err) {
+            setError(err.message);
+        } finally {
+            setPrReviewLoading(false);
         }
     };
 
@@ -700,8 +758,6 @@ function App() {
         }
     };
 
-    // --- REMOVED handleGenerateTests, handleWriteDocs, handleTranslate ---
-
     const clearHistory = () => {
         setReviewHistory([]);
     };
@@ -732,12 +788,107 @@ function App() {
         // Show global error first
         if (error) return <div className="error-box"><strong>Error:</strong> {error}</div>;
 
-        // Check modes
+        // --- RENDER LOGIC FOR REVIEW RESULTS (REUSABLE) ---
+        // Both Snippet and PR reviews will show this view
+        if (refactorResult) {
+            return (
+                <RefactorResult result={refactorResult} onClear={resetAppView} theme={theme} />
+            );
+        }
+
+        if (files.length > 0) {
+            return (
+                <>
+                    <button onClick={resetAppView} className="start-new-review-button">
+                        Start New Review
+                    </button>
+                    {(reviewLoading || prReviewLoading) && <LoadingSpinner />}
+                    <ReviewSummary files={files} />
+                    <div className="diff-container">
+                        {files.map((file) => (
+                            <div key={file.newPath} className="file-diff">
+                                <div className="file-header" onClick={() => setExpandedFiles(p => ({...p, [file.newPath]: !p[file.newPath]}))}>
+                                    <h2>
+                                        <span className={`expand-toggle ${expandedFiles[file.newPath] ? 'expanded' : 'collapsed'}`}>
+                                            {expandedFiles[file.newPath] ? '▼' : '▶'}
+                                        </span>
+                                        {file.newPath}
+                                        <span className="file-score-badge">{file.review?.codeHealthScore}</span>
+                                    </h2>
+                                    <div className="file-summary">
+                                        <span>{file.review?.comments?.length || 0} issues</span>
+                                        {file.review?.effortEstimation && (
+                                            <span className="effort-badge">
+                                                Effort: {file.review.effortEstimation}
+                                            </span>
+                                        )}
+                                    </div>
+                                </div>
+                                {expandedFiles[file.newPath] && (
+                                    <>
+                                        {file.review?.overallFeedback && (
+                                            <MentorFeedback feedback={file.review?.overallFeedback} />
+                                        )}
+                                        {file.review?.educationalLinks && file.review.educationalLinks.length > 0 && (
+                                            <EducationalLinks links={file.review.educationalLinks} />
+                                        )}
+                                        {file.hunks && file.hunks.length > 0 && (
+                                            <DiffView hunks={file.hunks} oldPath={file.oldPath} newPath={file.newPath}>
+                                                {(hunks) =>
+                                                    (hunks || []).map((hunk) => (
+                                                        <React.Fragment key={hunk.key}>
+                                                            {(hunk.lines || []).map((line) => (
+                                                                <div key={line.key} className={`diff-line ${line.type}`}>
+                                                                    <span className="line-number old">{line.oldLineNumber}</span>
+                                                                    <span className="line-number new">{line.newLineNumber}</span>
+                                                                    <span className="line-prefix">{line.prefix}</span>
+                                                                    <span className="line-content">{line.content}</span>
+                                                                </div>
+                                                            ))}
+                                                            {file.review?.comments &&
+                                                                file.review.comments.map((comment, index) => {
+                                                                    if (
+                                                                        hunk &&
+                                                                        comment.lineNumber >= hunk.newStart &&
+                                                                        comment.lineNumber <= hunk.newStart + hunk.newLines
+                                                                    ) {
+                                                                        return (
+                                                                            <CommentLine
+                                                                                key={index}
+                                                                                file={file}
+                                                                                comment={comment}
+                                                                                index={index}
+                                                                                isResolved={isCommentResolved(file.newPath, index)}
+                                                                                onToggleResolved={toggleCommentResolved}
+                                                                                theme={theme}
+                                                                            />
+                                                                        );
+                                                                    }
+                                                                    return null;
+                                                                })}
+                                                        </React.Fragment>
+                                                    ))
+                                                }
+                                            </DiffView>
+                                        )}
+                                    </>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                </>
+            );
+        }
+        // --- END OF REUSABLE RENDER LOGIC ---
+
+
+        // --- Mode-specific Input Views ---
         if (mode === 'history') {
             return <HistoryDashboard history={reviewHistory} onClear={clearHistory} theme={theme} />;
         }
 
         if (mode === 'explain') {
+            if (explainLoading) return <LoadingSpinner />;
             return <CodeExplainerBox
                 onExplain={handleExplain}
                 loading={explainLoading}
@@ -746,120 +897,27 @@ function App() {
             />;
         }
 
-        // --- REMOVED 'tools' mode block ---
+        // --- NEW: Show PR Input Box for 'pr' mode ---
+        if (mode === 'pr') {
+            if (prReviewLoading) return <LoadingSpinner />;
+            return <PrInputBox onPrReview={handlePrReview} loading={prReviewLoading} />;
+        }
 
-        // --- Snippet Mode Logic ---
+        // --- Default view is 'snippet' mode ---
         if (mode === 'snippet') {
-            if (refactorResult) {
-                return (
-                    <RefactorResult result={refactorResult} onClear={resetAppView} theme={theme} />
-                );
-            }
-
-            if (files.length > 0) {
-                return (
-                    <>
-                        <button onClick={resetAppView} className="start-new-review-button">
-                            Start New Review
-                        </button>
-                        {reviewLoading && <LoadingSpinner />}
-                        <ReviewSummary files={files} />
-                        <div className="diff-container">
-                            {files.map((file) => (
-                                <div key={file.newPath} className="file-diff">
-                                    <div className="file-header" onClick={() => setExpandedFiles(p => ({...p, [file.newPath]: !p[file.newPath]}))}>
-                                        <h2>
-                                            <span className={`expand-toggle ${expandedFiles[file.newPath] ? 'expanded' : 'collapsed'}`}>
-                                              {expandedFiles[file.newPath] ? '▼' : '▶'}
-                                            </span>
-                                            {file.newPath}
-                                            <span className="file-score-badge">{file.review?.codeHealthScore}</span>
-                                        </h2>
-                                        <div className="file-summary">
-                                            <span>{file.review?.comments?.length || 0} issues</span>
-                                            {file.review?.effortEstimation && (
-                                                <span className="effort-badge">
-                                                    Effort: {file.review.effortEstimation}
-                                                </span>
-                                            )}
-                                        </div>
-                                    </div>
-                                    {expandedFiles[file.newPath] && (
-                                        <>
-                                            {file.review?.overallFeedback && (
-                                                <MentorFeedback feedback={file.review?.overallFeedback} />
-                                            )}
-                                            {file.review?.educationalLinks && file.review.educationalLinks.length > 0 && (
-                                                <EducationalLinks links={file.review.educationalLinks} />
-                                            )}
-                                            {file.hunks && file.hunks.length > 0 && (
-                                                <DiffView hunks={file.hunks} oldPath={file.oldPath} newPath={file.newPath}>
-                                                    {(hunks) =>
-                                                        (hunks || []).map((hunk) => (
-                                                            <React.Fragment key={hunk.key}>
-                                                                {(hunk.lines || []).map((line) => (
-                                                                    <div key={line.key} className={`diff-line ${line.type}`}>
-                                                                        <span className="line-number old">{line.oldLineNumber}</span>
-                                                                        <span className="line-number new">{line.newLineNumber}</span>
-                                                                        <span className="line-prefix">{line.prefix}</span>
-                                                                        <span className="line-content">{line.content}</span>
-                                                                    </div>
-                                                                ))}
-                                                                {file.review?.comments &&
-                                                                    file.review.comments.map((comment, index) => {
-                                                                        if (
-                                                                            hunk &&
-                                                                            comment.lineNumber >= hunk.newStart &&
-                                                                            comment.lineNumber <= hunk.newStart + hunk.newLines
-                                                                        ) {
-                                                                            return (
-                                                                                <CommentLine
-                                                                                    key={index}
-                                                                                    file={file}
-                                                                                    comment={comment}
-                                                                                    index={index}
-                                                                                    isResolved={isCommentResolved(file.newPath, index)}
-                                                                                    onToggleResolved={toggleCommentResolved}
-                                                                                    theme={theme}
-                                                                                />
-                                                                            );
-                                                                        }
-                                                                        return null;
-                                                                    })}
-                                                            </React.Fragment>
-                                                        ))
-                                                    }
-                                                </DiffView>
-                                            )}
-                                        </>
-                                    )}
-                                </div>
-                            ))}
-                        </div>
-                    </>
-                );
-            }
-
-            // Show loading for snippet/refactor only in this mode
             if (reviewLoading) return <LoadingSpinner />;
             if (message) return <div className="message-box">{message}</div>;
 
             // Default view for 'snippet' mode
             return <CodeInputBox onReview={handleSnippetReview} onRefactor={handleRefactor} loading={reviewLoading} />;
         }
-
-        // Fallback for 'pr' mode
-        if (mode === 'pr') {
-            return <div className="error-box"><strong>GitHub PR Bot is Active:</strong> This tab is for the GitHub App. Open a Pull Request on your repository to see the review.</div>;
-        }
     };
 
     // Calculate loading states for tabs
-    // --- REMOVED 'anyToolLoading' ---
     const tabLoadings = {
         review: reviewLoading,
+        pr: prReviewLoading, // --- NEW ---
         explain: explainLoading,
-        // --- REMOVED 'tools' ---
     };
 
     return (

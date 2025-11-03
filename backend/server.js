@@ -6,22 +6,23 @@ import dotenv from 'dotenv';
 import { App } from '@octokit/app';
 import { Webhooks, createNodeMiddleware } from '@octokit/webhooks';
 import fs from 'fs';
+import { Octokit } from 'octokit';
 
 // --- Setup ---
 dotenv.config();
 const app = express();
 const port = 3001;
+const HOST = '127.0.0.1';
 
 const ollama = new Ollama({ host: 'http://127.0.0.1:11434' });
 const OLLAMA_MODEL = 'qwen2:0.5b';
 
-// --- GitHub App Setup ---
+// --- GitHub App Setup (FOR BOT ONLY) ---
 const githubApp = new App({
   appId: process.env.GITHUB_APP_ID,
   privateKey: fs.readFileSync(process.env.GITHUB_PRIVATE_KEY_PATH, 'utf8'),
 });
 
-// Conditionally add secret only if it exists in .env
 const webhookOptions = {};
 if (process.env.GITHUB_WEBHOOK_SECRET) {
   webhookOptions.secret = process.env.GITHUB_WEBHOOK_SECRET;
@@ -51,7 +52,6 @@ async function searchTheWeb(query) {
     if (!response.ok) { console.error('Serper API error:', await response.text()); return "Search failed."; }
     const data = await response.json();
     if (data.organic) {
-      // Return a concise summary of the top 3 results
       return data.organic.slice(0, 3).map(item => `Title: ${item.title}\nSnippet: ${item.snippet}\nSource: ${item.link}`).join('\n\n---\n\n');
     }
     return "No relevant search results found.";
@@ -62,19 +62,32 @@ async function searchTheWeb(query) {
 }
 
 // --- PROMPT TEMPLATES ---
+
+// ==================================================================
+// --- NEW, STRICTER BASE PROMPT ---
 const getBasePrompt = () => `
-  You are an expert code reviewer and a helpful, constructive mentor.
+  You are an expert, strict, and meticulous senior principal engineer. Your job is to find all potential issues.
+  Be highly critical. Do not give an "A+" score easily.
+
+  You MUST evaluate the code on the following criteria:
+  1.  **Logic & Bugs**: Check for potential runtime errors, off-by-one errors, null pointer exceptions, or logical fallacies.
+  2.  **Security**: Check for any vulnerabilities (XSS, SQL Injection, hardcoded secrets, etc.).
+  3.  **Performance**: Check for inefficient code, O(n^2) loops, or unnecessary operations.
+  4.  **Code Style**: Check for readability, naming conventions (like Google Style Guide), and maintainability.
+  5.  **Documentation**: Check for missing or unclear JSDoc/PyDoc comments.
+
   Provide your feedback in a structured JSON format.
   The JSON output MUST be an object with these keys:
-  1. "overallFeedback": A high-level, mentor-style summary.
-  2. "codeHealthScore": A "grade" (e.g., "A+", "B-").
-  3. "keyTakeaway": A single, concise sentence.
-  4. "comments": An array of line-by-line issues.
+  1. "overallFeedback": A high-level, critical summary. If you find issues, be direct.
+  2. "codeHealthScore": A "grade" (e.g., "A+", "B-"). Be a tough grader.
+  3. "keyTakeaway": A single, concise sentence about the most important issue.
+  4. "comments": An array of line-by-line issues. Be very detailed for each comment.
   5. "educationalLinks": (Optional) An array of objects ("topic", "url").
-  6. "effortEstimation": A string (e.g., "minimal", "moderate").
-  If there are no issues, return:
+  6. "effortEstimation": A string ("minimal", "moderate", "significant") estimating the effort to fix all issues.
+
+  If there are no issues at all (which is rare), you can return:
   {
-    "overallFeedback": "Excellent work! This code is clean, well-structured, and follows all best practices.",
+    "overallFeedback": "Excellent work. I've reviewed this meticulously and found no issues with logic, security, performance, or documentation. This is production-ready.",
     "codeHealthScore": "A+",
     "keyTakeaway": "This is production-ready code.",
     "comments": [],
@@ -82,8 +95,9 @@ const getBasePrompt = () => `
     "effortEstimation": "none"
   }
 `;
+// --- END OF NEW PROMPT ---
+// ==================================================================
 
-// --- UPDATED Prompt ---
 const gitDiffPrompt = (file, searchResults) => `
   ${getBasePrompt()}
   
@@ -93,13 +107,12 @@ const gitDiffPrompt = (file, searchResults) => `
   --- END CONTEXT ---
 
   Analyze the following git diff for the file "${file.newPath}".
-  Use the web search context to inform your review and any educational links.
+  Use the web search context to inform your review. Be extremely critical.
   \`\`\`diff
   ${file.hunks.map(hunk => hunk.content).join('\n')}
   \`\`\`
 `;
 
-// --- UPDATED Prompt ---
 const codeSnippetPrompt = (code, filename, searchResults) => `
   ${getBasePrompt()}
 
@@ -109,13 +122,12 @@ const codeSnippetPrompt = (code, filename, searchResults) => `
   --- END CONTEXT ---
   
   Analyze the following code snippet from a file named "${filename}".
-  Use the web search context to inform your review and any educational links.
+  Use the web search context to inform your review. Be extremely critical.
   \`\`\`
   ${code}
   \`\`\`
 `;
 
-// --- UPDATED Prompt ---
 const refactorPrompt = (code, filename, searchResults) => `
   You are an expert senior software engineer.
   Rewrite the following code from "${filename}" to improve its
@@ -158,7 +170,6 @@ const followUpPrompt = (originalComment, conversationHistory, searchResults) => 
   Respond as a single block of text (not JSON).
 `;
 
-// --- UPDATED Prompt ---
 const explainPrompt = (code, language, searchResults) => `
   You are an expert software engineer and a clear communicator.
   Explain what the following code snippet (from a ${language} file) does.
@@ -179,13 +190,21 @@ const explainPrompt = (code, language, searchResults) => `
   \`\`\`
 `;
 
-// --- UPDATED Prompt ---
+// ==================================================================
+// --- NEW, STRICTER SPECIALIZED PROMPTS ---
 const specializedReviewPrompt = (code, filename, mode, searchResults) => {
-  let systemPrompt = getBasePrompt(); // Start with the base
+  let systemPrompt = getBasePrompt(); // Start with the strict base prompt
+
   if (mode === 'security') {
-    systemPrompt = `You are an expert security auditor. Analyze the following code from "${filename}" *only* for security vulnerabilities. Look for XSS, SQL Injection, buffer overflows, insecure dependencies, or hardcoded secrets. Ignore all style or performance comments.`;
+    systemPrompt = `You are an expert security auditor. Analyze the following code from "${filename}" *only* for security vulnerabilities.
+    Look for: XSS, SQL Injection, buffer overflows, insecure dependencies, hardcoded secrets, improper error handling, or broken access control.
+    Ignore all style, performance, or documentation comments.
+    Use the JSON format from the base prompt.`;
   } else if (mode === 'performance') {
-    systemPrompt = `You are a senior principal engineer. Analyze the code from "${filename}" *only* for performance bottlenecks. Look for inefficient loops (O(n^2)), memory leaks, N+1 query problems, or blocking operations. Ignore all style or security comments.`;
+    systemPrompt = `You are a senior principal engineer. Analyze the code from "${filename}" *only* for performance bottlenecks.
+    Look for: inefficient loops (O(n^2)), memory leaks, N+1 query problems, blocking operations, or poor algorithm choice.
+    Ignore all style or security comments.
+    Use the JSON format from the base prompt.`;
   }
 
   return `
@@ -204,6 +223,8 @@ const specializedReviewPrompt = (code, filename, mode, searchResults) => {
     \`\`\`
   `;
 };
+// --- END OF NEW PROMPTS ---
+// ==================================================================
 
 // --- AI HELPER FUNCTIONS ---
 async function getAiJsonResponse(prompt, model) {
@@ -213,12 +234,12 @@ async function getAiJsonResponse(prompt, model) {
   return JSON.parse(response.message.content);
 }
 
-// --- GITHUB WEBHOOK ENDPOINTS ---
+// --- GITHUB WEBHOOK ENDPOINTS (BOT) ---
+// ... (This section is unchanged) ...
 app.post('/api/github-event', createNodeMiddleware(webhooks), (req, res) => {
   res.status(200).send('Event received');
 });
 
-// --- UPDATED: Webhook logic is now inline ---
 webhooks.on(['pull_request.opened', 'pull_request.synchronize'], async (event) => {
 
   console.log(`Processing PR: ${event.payload.pull_request.title}`);
@@ -250,7 +271,6 @@ Hello! I'm checking this PR... This might take a few moments.`,
     const reviewPromises = files.map(async (file) => {
       if (file.type === 'deleted' || file.isBinary) return { ...file, review: { ok: true, comments: [] } };
       try {
-        // --- UPDATED: Add web search to GitHub Bot reviews ---
         const searchQuery = `code review best practices for ${file.newPath}`;
         const searchResults = await searchTheWeb(searchQuery);
 
@@ -295,19 +315,16 @@ webhooks.onError((error) => {
 });
 
 // --- WEB APP ENDPOINTS ---
-
-// --- UPDATED: Endpoint now uses web search ---
+// ... (review-snippet is unchanged, but will use the new stricter prompts) ...
 app.post('/api/review-snippet', async (req, res) => {
   const { code, filename, mode } = req.body;
   if (!code || !filename) return res.status(400).json({ error: 'Missing code or filename' });
   console.log(`Received /api/review-snippet request for ${filename} (Mode: ${mode})`);
 
   try {
-    // --- 1. Perform web search ---
     const searchQuery = `${mode} code review for ${filename}`;
     const searchResults = await searchTheWeb(searchQuery);
 
-    // --- 2. Create prompt with search results ---
     let prompt;
     if (mode === 'standard') {
       prompt = codeSnippetPrompt(code, filename, searchResults);
@@ -315,7 +332,6 @@ app.post('/api/review-snippet', async (req, res) => {
       prompt = specializedReviewPrompt(code, filename, mode, searchResults);
     }
 
-    // --- 3. Get AI response ---
     const reviewJson = await getAiJsonResponse(prompt, OLLAMA_MODEL);
 
     const lines = code.split('\n');
@@ -337,21 +353,16 @@ app.post('/api/review-snippet', async (req, res) => {
   }
 });
 
-// --- UPDATED: Endpoint now uses web search ---
+// ... (refactor is unchanged) ...
 app.post('/api/refactor', async (req, res) => {
   const { code, filename } = req.body;
   if (!code || !filename) return res.status(400).json({ error: 'Missing code or filename' });
   console.log(`Received /api/refactor request for ${filename}`);
 
   try {
-    // --- 1. Perform web search ---
     const searchQuery = `refactoring techniques for ${filename}`;
     const searchResults = await searchTheWeb(searchQuery);
-
-    // --- 2. Create prompt with search results ---
     const prompt = refactorPrompt(code, filename, searchResults);
-
-    // --- 3. Get AI response ---
     const refactorJson = await getAiJsonResponse(prompt, OLLAMA_MODEL);
 
     res.json({
@@ -366,6 +377,70 @@ app.post('/api/refactor', async (req, res) => {
   }
 });
 
+
+// ... (review-pr is unchanged, but will use the new stricter gitDiffPrompt) ...
+app.post('/api/review-pr', async (req, res) => {
+  const { prUrl } = req.body;
+  if (!prUrl) return res.status(400).json({ error: 'Missing prUrl' });
+  console.log(`Received /api/review-pr request for ${prUrl}`);
+
+  if (!process.env.GITHUB_PAT) {
+    return res.status(500).json({ error: 'Server is missing GITHUB_PAT. This feature is not configured.' });
+  }
+
+  try {
+    // 1. Parse the PR URL
+    const urlParts = prUrl.match(/github\.com\/([^\/]+)\/([^\/]+)\/pull\/(\d+)/);
+    if (!urlParts) {
+      return res.status(400).json({ error: 'Invalid GitHub PR URL. Must be in format .../owner/repo/pull/123' });
+    }
+    const [, owner, repo, pull_number] = urlParts;
+
+    // 2. Create a simple Octokit client with your PAT
+    const octokit = new Octokit({ auth: process.env.GITHUB_PAT });
+
+    // 3. Get the PR diff
+    const { data: diff } = await octokit.rest.pulls.get({
+      owner,
+      repo,
+      pull_number,
+      mediaType: { format: 'diff' } // We need the raw diff
+    });
+
+    // 4. Parse the diff
+    const files = gitDiffParser.parse(diff);
+
+    // 5. Run the *exact same* review logic as the webhook
+    const reviewPromises = files.map(async (file) => {
+      if (file.type === 'deleted' || file.isBinary) {
+        return { ...file, review: { ok: true, comments: [] } };
+      }
+      try {
+        const searchQuery = `code review best practices for ${file.newPath}`;
+        const searchResults = await searchTheWeb(searchQuery);
+        const reviewJson = await getAiJsonResponse(gitDiffPrompt(file, searchResults), OLLAMA_MODEL);
+        return { ...file, review: reviewJson };
+      } catch (ollamaError) {
+        console.error(`Ollama error for ${file.newPath}:`, ollamaError.message);
+        return { ...file, review: { error: true, comments: [{ lineNumber: 1, severity: "error", comment: `Failed to get AI review: ${ollamaError.message}` }] } };
+      }
+    });
+
+    const reviewedFiles = await Promise.all(reviewPromises);
+
+    // 6. Send the review back to the frontend
+    res.json({ files: reviewedFiles });
+
+  } catch (error) {
+    console.error(`Error processing PR review for ${prUrl}:`, error.message);
+    if (error.status === 404) {
+      return res.status(404).json({ error: 'Pull Request not found. (Or your PAT does not have permission to access it).', details: error.message });
+    }
+    res.status(500).json({ error: 'Internal server error', details: error.message });
+  }
+});
+
+// ... (explain, follow-up, apply-fix, and error handler are unchanged) ...
 async function streamAiResponse(res, prompt, model = OLLAMA_MODEL) {
   try {
     res.writeHead(200, {
@@ -391,7 +466,6 @@ async function streamAiResponse(res, prompt, model = OLLAMA_MODEL) {
   }
 }
 
-// --- UPDATED: Endpoint now uses web search ---
 app.post('/api/explain', async (req, res) => {
   const { code, filename } = req.body;
   if (!code || !filename) return res.status(400).json({ error: 'Missing code or filename' });
@@ -399,15 +473,10 @@ app.post('/api/explain', async (req, res) => {
 
   try {
     const language = filename.split('.').pop() || 'javascript';
-
-    // --- 1. Perform web search ---
     const searchQuery = `explain ${language} code snippet: ${code.substring(0, 50)}...`;
     const searchResults = await searchTheWeb(searchQuery);
-
-    // --- 2. Create prompt with search results ---
     const prompt = explainPrompt(code, language, searchResults);
 
-    // --- 3. Get AI response ---
     const response = await ollama.chat({
       model: OLLAMA_MODEL,
       messages: [{ role: 'user', content: prompt }],
@@ -429,7 +498,6 @@ app.post('/api/follow-up', async (req, res) => {
   console.log(`Received /api/follow-up request: ${userQuestion}`);
 
   try {
-    // This endpoint already uses web search, so no changes needed
     console.log('Performing web search...');
     const searchResults = await searchTheWeb(userQuestion);
     const prompt = followUpPrompt(originalComment, conversation, searchResults);
@@ -451,13 +519,8 @@ app.use((err, _req, res, _next) => {
   res.status(500).send('Something broke on the server!');
 });
 
-// ==================================================================
-// --- THIS IS THE FIX ---
-// Explicitly listen on '127.0.0.1' to match the smee-client
-const HOST = '127.0.0.1';
+// --- Server Listen ---
 app.listen(port, HOST, () => {
   console.log(`Backend server running at http://${HOST}:${port}`);
   console.log('GitHub App webhook listener running on /api/github-event');
 });
-// --- END OF FIX ---
-// ==================================================================
