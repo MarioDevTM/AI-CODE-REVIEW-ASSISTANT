@@ -1,0 +1,12 @@
+{
+  "name": "ai-review-app",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "concurrently \"npm start --prefix backend\" \"npm run dev --prefix frontend\""
+  },
+  "dependencies": {
+    "concurrently": "^8.2.2",
+    "react-markdown": "^10.1.0",
+    "smee-client": "^4.4.1"
+  }
+}
